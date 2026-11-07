@@ -2,7 +2,7 @@
 ## Title: Zone Quest Tracker
 ## Notes: Shows only quests for your current zone in the objective tracker, sorted by quest level.
 ## Author: TheVariableK
-## Version: 1.1.0
+## Version: 1.2.0
 ## SavedVariablesPerCharacter: ZoneQuestTrackerDB
 
 ZoneQuestTracker.lua

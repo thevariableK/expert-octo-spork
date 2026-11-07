@@ -169,6 +169,61 @@ local function BuildDesired(quests)
 	return zoneList
 end
 
+-- Where AddQuestWatch puts a new watch: "append" (bottom) or "prepend" (top).
+-- Learned from the client at runtime; the Forever client has been seen to prepend.
+local insertMode
+
+local function WatchIndexOf(questID)
+	for i = 1, C_QuestLog.GetNumQuestWatches() do
+		if C_QuestLog.GetQuestIDForQuestWatchIndex(i) == questID then return i end
+	end
+end
+
+-- Adds a watch and, if we don't know yet, records where the client placed it.
+local function AddAndLearn(questID)
+	C_QuestLog.AddQuestWatch(questID)
+	if insertMode then return end
+	local count = C_QuestLog.GetNumQuestWatches()
+	if count < 2 then return end
+	local index = WatchIndexOf(questID)
+	if index == 1 then
+		insertMode = "prepend"
+	elseif index == count then
+		insertMode = "append"
+	end
+end
+
+local function RewriteAppend(current, desired)
+	-- New watches go to the bottom: keep the matching prefix, rebuild below it.
+	local prefix = 0
+	while prefix < #current and prefix < #desired and current[prefix + 1] == desired[prefix + 1] do
+		prefix = prefix + 1
+	end
+	for i = #current, prefix + 1, -1 do
+		C_QuestLog.RemoveQuestWatch(current[i])
+	end
+	for i = prefix + 1, #desired do
+		AddAndLearn(desired[i])
+		if insertMode == "prepend" then return false end -- wrong assumption; caller redoes it
+	end
+	return true
+end
+
+local function RewritePrepend(current, desired)
+	-- New watches go to the top: keep the matching suffix, rebuild above it
+	-- by adding from the bottom-most missing quest up to the top one.
+	local suffix = 0
+	while suffix < #current and suffix < #desired and current[#current - suffix] == desired[#desired - suffix] do
+		suffix = suffix + 1
+	end
+	for i = 1, #current - suffix do
+		C_QuestLog.RemoveQuestWatch(current[i])
+	end
+	for i = #desired - suffix, 1, -1 do
+		C_QuestLog.AddQuestWatch(desired[i])
+	end
+end
+
 local function ApplyWatches(current, desired)
 	if ListsEqual(current, desired) then return end
 
@@ -180,16 +235,10 @@ local function ApplyWatches(current, desired)
 
 	local superTracked = C_SuperTrack and C_SuperTrack.GetSuperTrackedQuestID and C_SuperTrack.GetSuperTrackedQuestID()
 
-	-- Keep the matching prefix; only rewrite from the first difference onwards.
-	local prefix = 0
-	while prefix < #current and prefix < #desired and current[prefix + 1] == desired[prefix + 1] do
-		prefix = prefix + 1
-	end
-	for i = #current, prefix + 1, -1 do
-		C_QuestLog.RemoveQuestWatch(current[i])
-	end
-	for i = prefix + 1, #desired do
-		C_QuestLog.AddQuestWatch(desired[i])
+	if insertMode == "prepend" then
+		RewritePrepend(current, desired)
+	elseif not RewriteAppend(current, desired) then
+		RewritePrepend(CurrentWatchList(), desired)
 	end
 
 	if superTracked and superTracked ~= 0 and ToSet(desired)[superTracked]
@@ -337,6 +386,14 @@ SlashCmdList.ZONEQUESTTRACKER = function(msg)
 		else
 			Print("disabled - tracked quests left as they are.")
 		end
+	elseif msg == "debug" then
+		local quests = CollectQuests()
+		Print(("enabled=%s, insert mode=%s, zone=%s"):format(tostring(db.enabled), insertMode or "unknown", GetRealZoneText() or "?"))
+		for i, questID in ipairs(CurrentWatchList()) do
+			local q = quests[questID]
+			local why = db.pinned[questID] and "pinned" or (q and q.inZone and "zone") or "other"
+			print(("  %d. [%s] %s (%s, id %d)"):format(i, q and q.level or "?", q and q.title or "?", why, questID))
+		end
 	elseif msg == "unpin" then
 		wipe(db.pinned)
 		wipe(dismissed)
@@ -344,6 +401,6 @@ SlashCmdList.ZONEQUESTTRACKER = function(msg)
 		QueueRefresh()
 		Print("cleared pinned and dismissed quests.")
 	else
-		Print("commands: /zqt (toggle), /zqt on, /zqt off, /zqt unpin")
+		Print("commands: /zqt (toggle), /zqt on, /zqt off, /zqt unpin, /zqt debug")
 	end
 end
